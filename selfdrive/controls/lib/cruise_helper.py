@@ -638,6 +638,20 @@ class CruiseHelper:
     # 정지상태, 소프트홀드일때 크루즈 ON
     if self.v_ego_kph < 5.0 and self.xState == XState.softHold and self.auto_cruise_control:
       longActiveUser = 3
+
+    # 정지상태 
+    elif self.v_ego_kph == 0 and self.dRel > 0 and self.dRel < 10.0 and self.auto_cruise_control:  # 선행차가 가까이 있을 때
+      print("check_brake_cruise_on - 정지상태, 선행차 있음 (ACC, DEC 버튼 누를 시 크루즈 다시 활성화)")
+      for b in buttonEvents:
+          if b.pressed and b.type in [ButtonType.accelCruise, ButtonType.decelCruise]:
+              longActiveUser = 3
+              if b.type == ButtonType.accelCruise:
+                  print("acc - 이전 속도 셋")
+                  v_cruise_kph = self.v_cruise_kph_backup  # 이전 속도로 크루즈
+              elif b.type == ButtonType.decelCruise:
+                  print("dec - 최소속도 셋")
+                  v_cruise_kph = self.cruiseSpeedMin  # 최소 속도로 크루즈
+
     # 브레이크해제 켜지고, 크루즈갭이 5가 아닌경우에만 작동.
     elif self.autoResumeFromBrakeRelease and self.auto_cruise_control: # 브레이크 해제에 대한 크루즈 ON
       gasTime = (self.frame - self.gasPressedFrame)*DT_CTRL
@@ -656,14 +670,6 @@ class CruiseHelper:
             else:  # 깜박이가 꺼져있으면 직진이라 가정
               if self.autoResumeFromBrakeReleaseTrafficSign:
                 longActiveUser = 3  
-          elif self.v_ego_kph == 0 and self.dRel > 0 and self.dRel < 10.0:  # 선행차가 가까이 있을 때
-            for b in buttonEvents:
-                if b.pressed and b.type in [ButtonType.accelCruise, ButtonType.decelCruise]:
-                    longActiveUser = 3
-                    if b.type == ButtonType.accelCruise:
-                        v_cruise_kph = self.v_cruise_kph_backup  # 이전 속도로 크루즈
-                    elif b.type == ButtonType.decelCruise:
-                        v_cruise_kph = self.cruiseSpeedMin  # 최소 속도로 크루즈
       # 주행
       elif resume_cond:
         if 0 < self.dRel:   # 전방에 차량이 있는경우
