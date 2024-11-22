@@ -52,6 +52,7 @@ V_CRUVE_LOOKUP_VALS = [300, 150, 120, 110, 100, 90, 80, 70, 60, 50, 45, 35, 30]
 class CruiseHelper:
 
   def __init__(self):
+    self.brake_cruise_reactivation_flag = False
     self.mapValid = 0
     self.v_cruise_kph_apply = 20
     self.v_cruise_kph_backup = 20
@@ -173,7 +174,7 @@ class CruiseHelper:
         self.autoResumeFromGas = int(Params().get("AutoResumeFromGas", encoding="utf8"))
         self.autoResumeFromBrakeRelease = Params().get_bool("AutoResumeFromBrakeRelease")
         self.AutoResumeFromBrakeReleaseSetSpeed = Params().get_bool("AutoResumeFromBrakeReleaseSetSpeed")
-        print('AutoResumeFromBrakeReleaseSetSpeed value : ' + str(self.AutoResumeFromBrakeReleaseSetSpeed))
+        # print('AutoResumeFromBrakeReleaseSetSpeed value : ' + str(self.AutoResumeFromBrakeReleaseSetSpeed))
       elif self.update_params_count == 5:
         self.autoSyncCruiseSpeedMax = int(Params().get("AutoSyncCruiseSpeedMax"))
         self.autoResumeFromBrakeReleaseDist = float(int(Params().get("AutoResumeFromBrakeReleaseDist", encoding="utf8")))
@@ -249,7 +250,9 @@ class CruiseHelper:
 
   def cruise_control(self, controls, CS, active_mode, v_cruise_kph):  #active_mode => -3(OFF auto), -2(OFF brake), -1(OFF user), 0(OFF), 1(ON user), 2(ON gas), 3(ON auto)
     if controls.enabled:
+      print(f'Cruise enabled - self.v_cruise_kph_backup: {self.v_cruise_kph_backup}')
       if active_mode > 0 and controls.CC.longEnabled:
+        print(f"active cruise active_mode:{active_mode} / controls.CC.longEnabled:{controls.CC.longEnabled} self.longActiveUser:{self.longActiveUser}")
         if self.longActiveUser <= 0:
           controls.LoC.reset(v_pid=CS.vEgo)
         if self.longControlActiveSound >= 2 and self.longActiveUser != active_mode:
@@ -259,6 +262,7 @@ class CruiseHelper:
         self.auto_cruise_control = True
 
       elif active_mode <= 0:
+        print(f"active_mode: {active_mode} / longActiveUser: {self.longActiveUser}")
         if self.longActiveUser > 0:
           self.v_cruise_kph_backup = v_cruise_kph
           if self.longControlActiveSound >= 2:
@@ -291,8 +295,10 @@ class CruiseHelper:
           ButtonPrev = b.type
         elif not b.pressed and ButtonCnt > 0:
           if b.type == ButtonType.cancel:
+            print('cancel button pressed')
             self.cruise_control(controls, CS, 0, v_cruise_kph)
             self.auto_cruise_control = False
+            self.brake_cruise_reactivation_flag = False
           elif not LongPressed and b.type == ButtonType.accelCruise:
             v_cruise_kph += button_speed_up_diff if metric else button_speed_up_diff * CV.MPH_TO_KPH
             button_type = ButtonType.accelCruise
@@ -306,6 +312,7 @@ class CruiseHelper:
 
           LongPressed = False
           ButtonCnt = 0
+          
       if ButtonCnt > 40:
         LongPressed = True
         V_CRUISE_DELTA = 10
@@ -321,7 +328,7 @@ class CruiseHelper:
           v_cruise_kph -= V_CRUISE_DELTA - -v_cruise_kph % V_CRUISE_DELTA
           button_type = ButtonType.decelCruise
           ButtonCnt %= 40
-        elif ButtonPrev == ButtonType.gapAdjustCruise:
+        elif ButtonPrev == ButtonType.gapAdjustCruise: # 갭 버튼 길게 눌렀을 때 cancel
           self.longActiveUser = 0
           controls.events.add(EventName.buttonCancel)
           ButtonCnt = 0
@@ -632,25 +639,13 @@ class CruiseHelper:
   #
   #
   def check_brake_cruise_on(self, CS, v_cruise_kph, controls, buttonEvents):
+    print(f"check_brake_cruise_on - v_cruise_kph:{v_cruise_kph}")
     longActiveUser = self.longActiveUser
     resume_cond = abs(CS.steeringAngleDeg) < 20 # and not CS.steeringPressed
 
     # 정지상태, 소프트홀드일때 크루즈 ON
     if self.v_ego_kph < 5.0 and self.xState == XState.softHold and self.auto_cruise_control:
       longActiveUser = 3
-
-    # 정지상태 
-    elif self.v_ego_kph == 0 and self.dRel > 0 and self.dRel < 10.0 and self.auto_cruise_control:  # 선행차가 가까이 있을 때
-      print("check_brake_cruise_on - 정지상태, 선행차 있음 (ACC, DEC 버튼 누를 시 크루즈 다시 활성화)")
-      for b in buttonEvents:
-          if b.pressed and b.type in [ButtonType.accelCruise, ButtonType.decelCruise]:
-              longActiveUser = 3
-              if b.type == ButtonType.accelCruise:
-                  print("acc - 이전 속도 셋")
-                  v_cruise_kph = self.v_cruise_kph_backup  # 이전 속도로 크루즈
-              elif b.type == ButtonType.decelCruise:
-                  print("dec - 최소속도 셋")
-                  v_cruise_kph = self.cruiseSpeedMin  # 최소 속도로 크루즈
 
     # 브레이크해제 켜지고, 크루즈갭이 5가 아닌경우에만 작동.
     elif self.autoResumeFromBrakeRelease and self.auto_cruise_control: # 브레이크 해제에 대한 크루즈 ON
@@ -705,10 +700,6 @@ class CruiseHelper:
   def button_control(self, enabled, controls, CS, v_cruise_kph, buttonEvents, metric):
     button,buttonLong,buttonSpeed = self.update_cruise_buttons(enabled, controls,CS,  buttonEvents, v_cruise_kph, metric)
     longActiveUser = self.longActiveUser
-
-    # 버튼 이벤트 로그 출력
-    for b in buttonEvents:
-        print(f"Button pressed: {b.type}, Long press: {b.pressed}")
 
     ##### Cruise Button 처리...
     if buttonLong:
@@ -894,17 +885,22 @@ class CruiseHelper:
 
       if brakePressed:
         longActiveUser = -2
-        self.longActiveUserReady, v_cruise_kph = self.check_brake_cruise_on(CS, v_cruise_kph, controls, buttonEvents)
+        if not self.brake_cruise_reactivation_flag:
+          self.longActiveUserReady, v_cruise_kph = self.check_brake_cruise_on(CS, v_cruise_kph, controls, buttonEvents)
       elif CS.gasPressed:  
         self.longActiveUserReady, v_cruise_kph = self.check_gas_cruise_on(CS, v_cruise_kph)
+        self.brake_cruise_reactivation_flag = False
       elif not CS.gasPressed and self.gasPressedCount > 0:
         longActiveUser,v_cruise_kph = self.check_gas_cruise_on(CS, v_cruise_kph)
+        self.brake_cruise_reactivation_flag = False
       elif not brakePressed and self.preBrakePressed:
-        longActiveUser,v_cruise_kph = self.check_brake_cruise_on(CS, v_cruise_kph, controls, buttonEvents)
+        if not self.brake_cruise_reactivation_flag:
+          longActiveUser,v_cruise_kph = self.check_brake_cruise_on(CS, v_cruise_kph, controls, buttonEvents)
       elif self.userCruisePaused:
         if self.v_ego_kph > 3.0 and self.dRel > 0 and self.vRel < 0:          
           v_cruise_kph = self.v_ego_kph_set
           longActiveUser = 3
+          self.brake_cruise_reactivation_flag = False
         elif self.v_ego_kph > 20.0 and self.xState == XState.e2eStop: # and abs(self.position_y) < 3.0:
           v_cruise_kph = self.v_ego_kph_set
           longActiveUser = 3
